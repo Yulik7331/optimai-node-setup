@@ -805,6 +805,95 @@ final_check() {
     echo ""
 }
 
+# ===================== ЛОГИ =====================
+
+show_node_logs() {
+    banner "ЛОГИ НОДЫ"
+
+    local containers
+    containers=$(lxc list -c n --format csv | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V)
+    [ -z "$containers" ] && { error "Нет контейнеров"; return; }
+
+    echo -e "  ${BOLD}Доступные ноды:${NC}"
+    local i=1
+    local nodes=()
+    for c in $containers; do
+        local status
+        status=$(lxc exec "$c" </dev/null -- bash -c \
+            "ps aux | grep -E 'optimai_cli_core|node_cli_core' | grep -v grep | wc -l" 2>/dev/null || echo 0)
+        if [ "${status:-0}" -gt 0 ]; then
+            printf "  %2d) %-12s %b\n" "$i" "$c" "${GREEN}running${NC}"
+        else
+            printf "  %2d) %-12s %b\n" "$i" "$c" "${RED}stopped${NC}"
+        fi
+        nodes+=("$c")
+        i=$((i + 1))
+    done
+    echo ""
+    read -p "  Выбери ноду [1-${#nodes[@]}] или 0 для выхода: " node_choice
+
+    [ "$node_choice" = "0" ] && return
+    if ! [[ "$node_choice" =~ ^[0-9]+$ ]] || [ "$node_choice" -lt 1 ] || [ "$node_choice" -gt "${#nodes[@]}" ]; then
+        warn "Неверный выбор"
+        return
+    fi
+
+    local selected="${nodes[$((node_choice - 1))]}"
+    echo ""
+    echo -e "  ${BOLD}Логи $selected:${NC}"
+    echo "  ─────────────────────────────────────────"
+    echo ""
+    echo -e "  ${CYAN}1)${NC} Лог ноды (задания, ошибки)"
+    echo -e "  ${CYAN}2)${NC} Лог ноды — live (Ctrl+C для выхода)"
+    echo -e "  ${CYAN}3)${NC} Docker контейнеры"
+    echo -e "  ${CYAN}4)${NC} Auth статус"
+    echo -e "  ${CYAN}5)${NC} Системные процессы"
+    echo ""
+    read -p "  Что показать? [1-5]: " log_choice
+
+    case $log_choice in
+        1)
+            echo ""
+            echo -e "  ${CYAN}=== Последние 50 строк лога ===${NC}"
+            lxc exec "$selected" </dev/null -- tail -50 /var/log/optimai/node.log 2>/dev/null || echo "  Лог пуст или не найден"
+            ;;
+        2)
+            echo ""
+            echo -e "  ${CYAN}=== Live лог (Ctrl+C для выхода) ===${NC}"
+            lxc exec "$selected" </dev/null -- tail -f /var/log/optimai/node.log 2>/dev/null || echo "  Лог не найден"
+            ;;
+        3)
+            echo ""
+            echo -e "  ${CYAN}=== Docker контейнеры ===${NC}"
+            lxc exec "$selected" </dev/null -- docker ps -a --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null
+            ;;
+        4)
+            echo ""
+            echo -e "  ${CYAN}=== Auth статус ===${NC}"
+            lxc exec "$selected" </dev/null -- bash -c "optimai-cli auth status 2>&1" 2>/dev/null
+            ;;
+        5)
+            echo ""
+            echo -e "  ${CYAN}=== Процессы OptimAI ===${NC}"
+            lxc exec "$selected" </dev/null -- bash -c "ps aux | grep -E 'optimai|node_cli|crawl4ai|docker' | grep -v grep" 2>/dev/null
+            ;;
+        *)
+            warn "Неверный выбор"
+            ;;
+    esac
+}
+
+show_watchdog_log() {
+    banner "ЛОГ WATCHDOG"
+    echo -e "  ${CYAN}=== Последние 50 строк ===${NC}"
+    echo ""
+    tail -50 /var/log/optimai_watchdog.log 2>/dev/null || echo "  Лог не найден"
+    echo ""
+    echo "  ─────────────────────────────────────────"
+    echo -e "  Файл: /var/log/optimai_watchdog.log"
+    echo -e "  Cron: $(crontab -l 2>/dev/null | grep watchdog || echo 'не настроен')"
+}
+
 # ===================== ГЛАВНОЕ МЕНЮ =====================
 
 main_menu() {
@@ -829,11 +918,13 @@ main_menu() {
         echo -e "${PURPLE}║${NC}                                                   ${PURPLE}║${NC}"
         echo -e "${PURPLE}║${NC}  ${CYAN}СЕРВИС${NC}                                            ${PURPLE}║${NC}"
         echo -e "${PURPLE}║${NC}   9) Проверка статуса всех нод                    ${PURPLE}║${NC}"
+        echo -e "${PURPLE}║${NC}  10) Логи ноды                                    ${PURPLE}║${NC}"
+        echo -e "${PURPLE}║${NC}  11) Лог watchdog                                 ${PURPLE}║${NC}"
         echo -e "${PURPLE}║${NC}   0) Выход                                        ${PURPLE}║${NC}"
         echo -e "${PURPLE}║${NC}                                                   ${PURPLE}║${NC}"
         echo -e "${PURPLE}╚═══════════════════════════════════════════════════╝${NC}"
         echo ""
-        read -p "  Выбери пункт [0-9]: " choice
+        read -p "  Выбери пункт [0-11]: " choice
 
         case $choice in
             1)
@@ -855,6 +946,8 @@ main_menu() {
             7) start_all_nodes; read -p "Нажми Enter..." ;;
             8) install_watchdog; read -p "Нажми Enter..." ;;
             9) final_check; read -p "Нажми Enter..." ;;
+            10) show_node_logs; read -p "Нажми Enter..." ;;
+            11) show_watchdog_log; read -p "Нажми Enter..." ;;
             0) echo "Выход..."; exit 0 ;;
             *) warn "Неверный выбор"; sleep 1 ;;
         esac
