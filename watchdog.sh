@@ -132,8 +132,15 @@ stop_node() {
 start_node() {
     local container="$1"
     stop_node "$container"
-    lxc exec "$container" </dev/null -- bash -c \
-        "mkdir -p /var/log/optimai && nohup /usr/local/bin/optimai-cli node start >> /var/log/optimai/node.log 2>&1 &" 2>/dev/null
+    lxc exec "$container" </dev/null -- bash -c "
+        mkdir -p /var/log/optimai
+        CORE=/root/.optimai/optimai_cli_core
+        [ -f /root/.optimai/node_cli_core ] && CORE=/root/.optimai/node_cli_core
+        if [ ! -f \$CORE ]; then
+            /usr/local/bin/optimai-cli node start &>/dev/null & sleep 5; pkill -f optimai-cli 2>/dev/null; sleep 1
+        fi
+        nohup \$CORE node start >> /var/log/optimai/node.log 2>&1 &
+    " 2>/dev/null
     sleep 15
 }
 
