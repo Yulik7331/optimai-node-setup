@@ -2,6 +2,12 @@
 
 Автоматический установщик и watchdog для запуска OptimAI нод в LXD контейнерах.
 
+## Установка (одна команда)
+
+```bash
+curl -sL https://raw.githubusercontent.com/Yulik7331/optimai-node-setup/main/install.sh -o install.sh && chmod +x install.sh && bash install.sh
+```
+
 ## Что внутри
 
 | Файл | Описание |
