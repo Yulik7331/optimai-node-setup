@@ -894,6 +894,94 @@ show_watchdog_log() {
     echo -e "  Cron: $(crontab -l 2>/dev/null | grep watchdog || echo 'не настроен')"
 }
 
+# ===================== УДАЛЕНИЕ НОД =====================
+
+delete_nodes() {
+    banner "УДАЛЕНИЕ НОД"
+
+    local containers
+    containers=$(lxc list -c n --format csv | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V)
+    [ -z "$containers" ] && { error "Нет контейнеров"; return; }
+
+    echo -e "  ${BOLD}Доступные ноды:${NC}"
+    local i=1
+    local nodes=()
+    for c in $containers; do
+        local status
+        status=$(lxc exec "$c" </dev/null -- bash -c \
+            "ps aux | grep -E 'optimai_cli_core|node_cli_core' | grep -v grep | wc -l" 2>/dev/null || echo 0)
+        if [ "${status:-0}" -gt 0 ]; then
+            printf "  %2d) %-12s %b\n" "$i" "$c" "${GREEN}running${NC}"
+        else
+            printf "  %2d) %-12s %b\n" "$i" "$c" "${RED}stopped${NC}"
+        fi
+        nodes+=("$c")
+        i=$((i + 1))
+    done
+
+    echo ""
+    echo -e "  ${YELLOW}Можно указать несколько через пробел или диапазон: 1 3 5  или  2-5  или  all${NC}"
+    read -p "  Какие ноды удалить? " del_input
+
+    [ -z "$del_input" ] && return
+
+    # Парсим выбор
+    local to_delete=()
+    if [ "$del_input" = "all" ]; then
+        to_delete=("${nodes[@]}")
+    else
+        for part in $del_input; do
+            if [[ "$part" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+                for n in $(seq "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"); do
+                    [ "$n" -ge 1 ] && [ "$n" -le "${#nodes[@]}" ] && to_delete+=("${nodes[$((n-1))]}")
+                done
+            elif [[ "$part" =~ ^[0-9]+$ ]] && [ "$part" -ge 1 ] && [ "$part" -le "${#nodes[@]}" ]; then
+                to_delete+=("${nodes[$((part-1))]}")
+            fi
+        done
+    fi
+
+    [ ${#to_delete[@]} -eq 0 ] && { warn "Ничего не выбрано"; return; }
+
+    echo ""
+    echo -e "  ${RED}Будут удалены:${NC}"
+    for c in "${to_delete[@]}"; do
+        echo -e "    - $c"
+    done
+    echo ""
+    read -p "  Точно удалить? (yes/no): " confirm
+    [[ "$confirm" != "yes" ]] && { info "Отменено"; return; }
+
+    echo ""
+    local deleted=0 failed=0
+    for container in "${to_delete[@]}"; do
+        printf "  %-12s " "$container"
+
+        # Останавливаем worker
+        lxc exec "$container" </dev/null -- bash -c \
+            "pkill -9 -f optimai_cli_core 2>/dev/null; pkill -9 -f node_cli_core 2>/dev/null; pkill -9 -f optimai-cli 2>/dev/null" &>/dev/null || true
+
+        # Удаляем контейнер
+        lxc stop "$container" --force &>/dev/null || true
+        if lxc delete "$container" --force &>/dev/null; then
+            printf "%b\n" "${GREEN}удалён${NC}"
+            deleted=$((deleted + 1))
+        else
+            printf "%b\n" "${RED}ошибка${NC}"
+            failed=$((failed + 1))
+        fi
+    done
+
+    echo ""
+    info "Удалено: $deleted | Ошибок: $failed"
+
+    # Чистим fail-файлы watchdog
+    for container in "${to_delete[@]}"; do
+        rm -f "$FAIL_DIR/$container" 2>/dev/null || true
+        rm -f "/var/lib/optimai_watchdog/$container" 2>/dev/null || true
+    done
+}
+
 # ===================== ГЛАВНОЕ МЕНЮ =====================
 
 main_menu() {
@@ -920,11 +1008,12 @@ main_menu() {
         echo -e "${PURPLE}║${NC}   9) Проверка статуса всех нод                    ${PURPLE}║${NC}"
         echo -e "${PURPLE}║${NC}  10) Логи ноды                                    ${PURPLE}║${NC}"
         echo -e "${PURPLE}║${NC}  11) Лог watchdog                                 ${PURPLE}║${NC}"
+        echo -e "${PURPLE}║${NC}  12) Удалить ноды                                 ${PURPLE}║${NC}"
         echo -e "${PURPLE}║${NC}   0) Выход                                        ${PURPLE}║${NC}"
         echo -e "${PURPLE}║${NC}                                                   ${PURPLE}║${NC}"
         echo -e "${PURPLE}╚═══════════════════════════════════════════════════╝${NC}"
         echo ""
-        read -p "  Выбери пункт [0-11]: " choice
+        read -p "  Выбери пункт [0-12]: " choice
 
         case $choice in
             1)
@@ -948,6 +1037,7 @@ main_menu() {
             9) final_check; read -p "Нажми Enter..." ;;
             10) show_node_logs; read -p "Нажми Enter..." ;;
             11) show_watchdog_log; read -p "Нажми Enter..." ;;
+            12) delete_nodes; read -p "Нажми Enter..." ;;
             0) echo "Выход..."; exit 0 ;;
             *) warn "Неверный выбор"; sleep 1 ;;
         esac
