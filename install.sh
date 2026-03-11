@@ -363,23 +363,18 @@ install_optimai_cli() {
         donor=$(echo "$containers" | head -1)
         info "Запускаю логин в $donor..."
         echo ""
-        echo -e "  ${BOLD}Сейчас откроется URL — скопируй его в браузер и залогинься.${NC}"
-        echo -e "  ${BOLD}После успешного логина в браузере вернись сюда и нажми Enter.${NC}"
+        echo -e "  ${BOLD}Порядок действий:${NC}"
+        echo -e "  1. Сейчас появится URL — скопируй и открой в браузере"
+        echo -e "  2. Залогинься на сайте OptimAI"
+        echo -e "  3. После логина браузер перенаправит на localhost (страница НЕ загрузится — это нормально)"
+        echo -e "  4. Скопируй полный URL из адресной строки браузера"
+        echo -e "  5. Вставь его сюда когда CLI попросит"
+        echo ""
+        echo -e "  ${CYAN}Запускаю интерактивный логин...${NC}"
         echo ""
 
-        # Запускаем логин в фоне
-        lxc exec "$donor" </dev/null -- bash -c "optimai-cli auth login 2>&1" &
-        local login_pid=$!
-        sleep 5
-
-        # Показываем URL
-        echo -e "  ${CYAN}URL для логина:${NC}"
-        lxc exec "$donor" </dev/null -- bash -c "optimai-cli auth login 2>&1" 2>/dev/null | grep -o "https://.*" | head -1 || true
-        echo ""
-        read -p "  Нажми Enter после успешного логина в браузере..."
-
-        kill "$login_pid" 2>/dev/null || true
-        wait "$login_pid" 2>/dev/null || true
+        # Запускаем логин ИНТЕРАКТИВНО (stdin подключен для вставки redirect URL)
+        lxc exec "$donor" -- optimai-cli auth login
 
         # Проверяем
         local auth_check
