@@ -977,7 +977,6 @@ delete_nodes() {
 
     # Чистим fail-файлы watchdog
     for container in "${to_delete[@]}"; do
-        rm -f "$FAIL_DIR/$container" 2>/dev/null || true
         rm -f "/var/lib/optimai_watchdog/$container" 2>/dev/null || true
     done
 }
