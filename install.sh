@@ -192,6 +192,27 @@ install_lxd() {
     lxc profile device remove default root 2>/dev/null || true
     lxc profile device add default root disk path=/ pool=default 2>/dev/null || true
 
+    # --- Фикс сети: iptables FORWARD + NAT для LXD ---
+    local lxd_subnet
+    lxd_subnet=$(lxc network show lxdbr0 2>/dev/null | grep "ipv4.address" | awk '{print $2}' | sed 's|\.[0-9]*/|.0/|')
+    local default_iface
+    default_iface=$(ip route | grep "^default" | awk '{print $5}' | head -1)
+
+    if [ -n "$lxd_subnet" ] && [ -n "$default_iface" ]; then
+        info "Настройка iptables: LXD ($lxd_subnet) -> $default_iface"
+        # FORWARD: разрешить трафик LXD <-> интернет
+        iptables -C FORWARD -i lxdbr0 -o "$default_iface" -j ACCEPT 2>/dev/null || \
+            iptables -I FORWARD 1 -i lxdbr0 -o "$default_iface" -j ACCEPT
+        iptables -C FORWARD -i "$default_iface" -o lxdbr0 -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || \
+            iptables -I FORWARD 2 -i "$default_iface" -o lxdbr0 -m state --state RELATED,ESTABLISHED -j ACCEPT
+        # NAT: маскарадинг
+        iptables -t nat -C POSTROUTING -s "$lxd_subnet" -o "$default_iface" -j MASQUERADE 2>/dev/null || \
+            iptables -t nat -I POSTROUTING 1 -s "$lxd_subnet" -o "$default_iface" -j MASQUERADE
+        success "iptables настроен"
+    else
+        warn "Не удалось определить подсеть LXD или интерфейс. Настрой iptables вручную."
+    fi
+
     local existing=0 max_existing=0
     existing=$(lxc list -c n --format csv 2>/dev/null | grep -cE "^${CONTAINER_PREFIX}[0-9]+" || true)
     if [ "$existing" -gt 0 ]; then
@@ -228,6 +249,9 @@ lxc.cap.drop="
 
         lxc restart "$name"
         wait_container_ready "$name" || { error "$name не стартовал"; continue; }
+
+        # Fix DNS inside container
+        lxc exec "$name" -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf" 2>/dev/null || true
 
         created=$((created + 1))
         success "$name создан"
@@ -365,10 +389,10 @@ install_optimai_cli() {
         echo ""
         echo -e "  ${BOLD}Порядок действий:${NC}"
         echo -e "  1. Сейчас появится URL — скопируй и открой в браузере"
-        echo -e "  2. Залогинься на сайте OptimAI"
-        echo -e "  3. После логина браузер перенаправит на localhost (страница НЕ загрузится — это нормально)"
-        echo -e "  4. Скопируй полный URL из адресной строки браузера"
-        echo -e "  5. Вставь его сюда когда CLI попросит"
+        echo -e "  2. Залогинься или зарегистрируйся на сайте OptimAI"
+        echo -e "  3. Появится страница ${CYAN}Complete CLI sign-in${NC} с кодом"
+        echo -e "  4. Нажми ${CYAN}Copy code${NC} (или ${CYAN}Copy callback URL${NC})"
+        echo -e "  5. Вернись в терминал и вставь код/URL когда CLI попросит"
         echo ""
         echo -e "  ${CYAN}Запускаю интерактивный логин...${NC}"
         echo ""
