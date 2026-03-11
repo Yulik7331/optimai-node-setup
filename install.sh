@@ -142,7 +142,7 @@ setup_swap() {
     if [ "$current_swap" -gt 0 ]; then
         info "SWAP уже настроен:"
         swapon --show
-        free -h | grep Swap
+        free -h | grep Swap || true
         if [ -z "${SWAP_SIZE_GB:-}" ]; then
             echo ""
             read -p "Пересоздать SWAP? [y/N]: " recreate
@@ -278,7 +278,7 @@ lxc.cap.drop="
         wait_container_ready "$name" || { error "$name не стартовал"; continue; }
 
         # Fix DNS inside container (persistent — survives restart)
-        lxc exec "$name" -- bash -c "
+        lxc exec "$name" </dev/null -- bash -c "
             mkdir -p /etc/systemd/resolved.conf.d
             cat > /etc/systemd/resolved.conf.d/dns.conf <<DNSEOF
 [Resolve]
@@ -303,7 +303,7 @@ setup_docker() {
     banner "ЭТАП 4/7: Установка Docker в контейнерах"
 
     local containers
-    containers=$(lxc list -c n --format csv | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V)
+    containers=$(lxc list -c n --format csv 2>/dev/null | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V || true)
     [ -z "$containers" ] && { error "Нет контейнеров"; return 1; }
 
     local total=0 skipped=0 installed=0 failed=0
@@ -311,7 +311,7 @@ setup_docker() {
         total=$((total + 1))
 
         local driver
-        driver=$(lxc exec "$container" -- bash -c "docker info --format '{{.Driver}}' 2>/dev/null" 2>/dev/null || echo "none")
+        driver=$(lxc exec "$container" </dev/null -- bash -c "docker info --format '{{.Driver}}' 2>/dev/null" 2>/dev/null || echo "none")
         if [ "$driver" = "overlay2" ]; then
             skipped=$((skipped + 1))
             echo -e "  ${GREEN}✓${NC} $container — Docker overlay2 OK"
@@ -319,7 +319,7 @@ setup_docker() {
         fi
 
         info "$container — устанавливаю Docker..."
-        lxc exec "$container" -- bash <<'DOCKERSCRIPT'
+        lxc exec "$container" </dev/null -- bash <<'DOCKERSCRIPT' || true
 set -e
 systemctl stop docker 2>/dev/null || true
 apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null || true
@@ -356,7 +356,10 @@ for attempt in 1 2 3; do
 done
 DOCKERSCRIPT
 
-        if [ $? -eq 0 ]; then
+        # Проверяем результат Docker установки
+        local docker_result
+        docker_result=$(lxc exec "$container" </dev/null -- bash -c "docker info --format '{{.Driver}}' 2>/dev/null" 2>/dev/null || echo "none")
+        if [ "$docker_result" = "overlay2" ]; then
             installed=$((installed + 1))
             success "$container — Docker установлен"
         else
@@ -376,7 +379,7 @@ install_optimai_cli() {
     banner "ЭТАП 5/7: Установка OptimAI CLI и авторизация"
 
     local containers
-    containers=$(lxc list -c n --format csv | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V)
+    containers=$(lxc list -c n --format csv 2>/dev/null | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V || true)
     [ -z "$containers" ] && { error "Нет контейнеров"; return 1; }
 
     # --- Шаг 1: Установка CLI во все контейнеры ---
@@ -384,12 +387,12 @@ install_optimai_cli() {
     local installed=0
     for container in $containers; do
         echo -ne "  $container: "
-        if lxc exec "$container" -- test -f /usr/local/bin/optimai-cli 2>/dev/null; then
+        if lxc exec "$container" </dev/null -- test -f /usr/local/bin/optimai-cli 2>/dev/null; then
             echo -e "${GREEN}CLI есть${NC}"
             continue
         fi
         echo -ne "установка... "
-        lxc exec "$container" -- bash -c "
+        lxc exec "$container" </dev/null -- bash -c "
             curl -sL https://optimai.network/download/cli-node/linux -o /tmp/optimai-cli && \
             chmod +x /tmp/optimai-cli && \
             mv /tmp/optimai-cli /usr/local/bin/optimai-cli
@@ -435,7 +438,7 @@ install_optimai_cli() {
         echo ""
 
         # Запускаем логин ИНТЕРАКТИВНО (stdin подключен для вставки redirect URL)
-        lxc exec "$donor" -- optimai-cli auth login
+        lxc exec "$donor" -- optimai-cli auth login || true
 
         # Проверяем
         local auth_check
@@ -495,7 +498,7 @@ start_all_nodes() {
     banner "ЭТАП 6/7: Запуск нод"
 
     local containers
-    containers=$(lxc list -c n --format csv | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V)
+    containers=$(lxc list -c n --format csv 2>/dev/null | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V || true)
     [ -z "$containers" ] && { error "Нет контейнеров"; return 1; }
 
     local started=0 already=0 failed=0
@@ -762,7 +765,7 @@ final_check() {
     banner "ФИНАЛЬНАЯ ПРОВЕРКА"
 
     local containers
-    containers=$(lxc list -c n --format csv | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V)
+    containers=$(lxc list -c n --format csv 2>/dev/null | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V || true)
     [ -z "$containers" ] && { error "Нет контейнеров"; return; }
 
     local total=0 running=0 down=0
@@ -779,7 +782,7 @@ final_check() {
         docker_st=$(lxc exec "$container" </dev/null -- bash -c "docker info --format '{{.Driver}}' 2>/dev/null" 2>/dev/null || echo "none")
 
         local worker_icon auth_icon docker_icon
-        if [ "$worker_count" -gt 0 ]; then
+        if [ "${worker_count:-0}" -gt 0 ]; then
             worker_icon="${GREEN}running${NC}"
             running=$((running + 1))
         else
@@ -811,7 +814,7 @@ show_node_logs() {
     banner "ЛОГИ НОДЫ"
 
     local containers
-    containers=$(lxc list -c n --format csv | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V)
+    containers=$(lxc list -c n --format csv 2>/dev/null | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V || true)
     [ -z "$containers" ] && { error "Нет контейнеров"; return; }
 
     echo -e "  ${BOLD}Доступные ноды:${NC}"
@@ -900,7 +903,7 @@ delete_nodes() {
     banner "УДАЛЕНИЕ НОД"
 
     local containers
-    containers=$(lxc list -c n --format csv | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V)
+    containers=$(lxc list -c n --format csv 2>/dev/null | grep "^${CONTAINER_PREFIX}[0-9]" | sort -V || true)
     [ -z "$containers" ] && { error "Нет контейнеров"; return; }
 
     echo -e "  ${BOLD}Доступные ноды:${NC}"
