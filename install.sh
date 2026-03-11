@@ -468,20 +468,19 @@ install_optimai_cli() {
             continue
         fi
 
-        printf "  %-12s " "$container"
-        lxc exec "$container" </dev/null -- bash -c "mkdir -p /root/.config/optimai-cli" 2>/dev/null
-        lxc file push /var/lib/optimai_watchdog/auth_donor/auth.json "$container/root/.config/optimai-cli/auth.json" 2>/dev/null
-        lxc file push /var/lib/optimai_watchdog/auth_donor/user.json "$container/root/.config/optimai-cli/user.json" 2>/dev/null
+        lxc exec "$container" </dev/null -- bash -c "mkdir -p /root/.config/optimai-cli" &>/dev/null
+        lxc file push /var/lib/optimai_watchdog/auth_donor/auth.json "$container/root/.config/optimai-cli/auth.json" &>/dev/null
+        lxc file push /var/lib/optimai_watchdog/auth_donor/user.json "$container/root/.config/optimai-cli/user.json" &>/dev/null
         lxc exec "$container" </dev/null -- bash -c \
-            "chmod 600 /root/.config/optimai-cli/auth.json /root/.config/optimai-cli/user.json" 2>/dev/null
+            "chmod 600 /root/.config/optimai-cli/auth.json /root/.config/optimai-cli/user.json" &>/dev/null
 
         local check
         check=$(lxc exec "$container" </dev/null -- bash -c "optimai-cli auth status 2>&1" 2>/dev/null)
         if echo "$check" | grep -qi "logged in"; then
-            echo -e "${GREEN}OK${NC}"
+            printf "  %-12s %b\n" "$container" "${GREEN}OK${NC}"
             authed=$((authed + 1))
         else
-            echo -e "${RED}FAIL${NC}"
+            printf "  %-12s %b\n" "$container" "${RED}FAIL${NC}"
             auth_failed=$((auth_failed + 1))
         fi
     done
@@ -501,41 +500,42 @@ start_all_nodes() {
 
     local started=0 already=0 failed=0
     for container in $containers; do
-        printf "  %-12s " "$container"
-
         # Проверяем по реальным процессам (optimai_cli_core / node_cli_core)
         local running
         running=$(lxc exec "$container" </dev/null -- bash -c \
             "ps aux | grep -E 'optimai-cli node start|optimai_cli_core|node_cli_core' | grep -v grep | wc -l" 2>/dev/null)
-        if [ "$running" -gt 0 ]; then
-            echo -e "${GREEN}уже работает${NC}"
+        if [ "${running:-0}" -gt 0 ]; then
+            printf "  %-12s %b\n" "$container" "${GREEN}уже работает${NC}"
             already=$((already + 1))
             continue
         fi
 
-        echo -ne "запуск... "
         lxc exec "$container" </dev/null -- bash -c "
             pkill -9 -f 'optimai-cli' 2>/dev/null || true
             pkill -9 -f 'optimai_cli_core' 2>/dev/null || true
             pkill -9 -f 'node_cli_core' 2>/dev/null || true
             sleep 2
             mkdir -p /var/log/optimai
-            # Use core binary directly — wrapper doesn't survive nohup
             CORE=/root/.optimai/optimai_cli_core
             [ -f /root/.optimai/node_cli_core ] && CORE=/root/.optimai/node_cli_core
-            [ ! -f \$CORE ] && { /usr/local/bin/optimai-cli node start &>/dev/null & sleep 5; pkill -f optimai-cli 2>/dev/null; sleep 1; }
+            if [ ! -f \$CORE ]; then
+                /usr/local/bin/optimai-cli node start &>/dev/null &
+                sleep 5
+                pkill -f optimai-cli 2>/dev/null || true
+                sleep 1
+            fi
             nohup \$CORE node start >> /var/log/optimai/node.log 2>&1 &
-        " 2>/dev/null
+        " &>/dev/null || true
 
         sleep 15
 
         running=$(lxc exec "$container" </dev/null -- bash -c \
-            "ps aux | grep -E 'optimai-cli node start|optimai_cli_core|node_cli_core' | grep -v grep | wc -l" 2>/dev/null)
-        if [ "$running" -gt 0 ]; then
-            echo -e "${GREEN}OK${NC}"
+            "ps aux | grep -E 'optimai-cli node start|optimai_cli_core|node_cli_core' | grep -v grep | wc -l" 2>/dev/null || echo 0)
+        if [ "${running:-0}" -gt 0 ]; then
+            printf "  %-12s %b\n" "$container" "${GREEN}запущен${NC}"
             started=$((started + 1))
         else
-            echo -e "${RED}FAIL${NC}"
+            printf "  %-12s %b\n" "$container" "${RED}FAIL${NC}"
             failed=$((failed + 1))
         fi
     done
