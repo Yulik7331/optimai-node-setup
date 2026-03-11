@@ -462,9 +462,13 @@ install_optimai_cli() {
 
     local authed=0 auth_failed=0
     for container in $containers; do
-        [ "$container" = "$donor" ] && { authed=$((authed+1)); continue; }
-        echo -ne "  $container: "
+        if [ "$container" = "$donor" ]; then
+            authed=$((authed+1))
+            printf "  %-12s %b\n" "$container" "${GREEN}донор${NC}"
+            continue
+        fi
 
+        printf "  %-12s " "$container"
         lxc exec "$container" </dev/null -- bash -c "mkdir -p /root/.config/optimai-cli" 2>/dev/null
         lxc file push /var/lib/optimai_watchdog/auth_donor/auth.json "$container/root/.config/optimai-cli/auth.json" 2>/dev/null
         lxc file push /var/lib/optimai_watchdog/auth_donor/user.json "$container/root/.config/optimai-cli/user.json" 2>/dev/null
@@ -497,7 +501,7 @@ start_all_nodes() {
 
     local started=0 already=0 failed=0
     for container in $containers; do
-        echo -ne "  $container: "
+        printf "  %-12s " "$container"
 
         # Проверяем по реальным процессам (optimai_cli_core / node_cli_core)
         local running
