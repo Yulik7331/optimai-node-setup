@@ -193,7 +193,7 @@ install_lxd() {
     lxc profile device add default root disk path=/ pool=default 2>/dev/null || true
 
     local existing=0 max_existing=0
-    existing=$(lxc list -c n --format csv 2>/dev/null | grep -cE "^${CONTAINER_PREFIX}[0-9]+" || echo 0)
+    existing=$(lxc list -c n --format csv 2>/dev/null | grep -cE "^${CONTAINER_PREFIX}[0-9]+" || true)
     if [ "$existing" -gt 0 ]; then
         max_existing=$(lxc list -c n --format csv | grep -E "^${CONTAINER_PREFIX}[0-9]+" | sed "s/${CONTAINER_PREFIX}//" | sort -n | tail -1)
         info "Существует контейнеров: $existing (последний: ${CONTAINER_PREFIX}${max_existing})"
