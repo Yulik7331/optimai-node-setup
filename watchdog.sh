@@ -178,6 +178,7 @@ while IFS=, read -r -u3 container status; do
             continue
         fi
         log "LXC_STARTED: $container"
+        lxc exec "$container" </dev/null -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf" 2>/dev/null || true
         sleep 5
     fi
 

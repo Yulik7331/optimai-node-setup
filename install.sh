@@ -58,6 +58,29 @@ check_root() {
     fi
 }
 
+check_virtualization() {
+    local virt
+    virt=$(systemd-detect-virt 2>/dev/null || echo "unknown")
+    case "$virt" in
+        openvz|lxc|lxc-libvirt)
+            error "Виртуализация $virt НЕ поддерживает LXD (нестинг контейнеров)."
+            error "Нужен KVM, VMware, bare metal или Hyper-V."
+            exit 1
+            ;;
+        *)
+            info "Виртуализация: $virt — OK"
+            ;;
+    esac
+}
+
+detect_default_iface() {
+    local iface
+    # Исключаем VPN/tunnel интерфейсы, берём физический
+    iface=$(ip route | grep "^default" | grep -v "tun\|wg\|tailscale" | awk '{print $5}' | head -1)
+    [ -z "$iface" ] && iface=$(ip route | grep "^default" | awk '{print $5}' | head -1)
+    echo "$iface"
+}
+
 wait_container_ready() {
     local name="$1"
     local max_wait=60
@@ -77,6 +100,8 @@ wait_container_ready() {
 install_system_deps() {
     banner "ЭТАП 1/7: Обновление системы"
 
+    check_virtualization
+
     info "ОС: $(lsb_release -d 2>/dev/null | cut -f2 || cat /etc/os-release | grep PRETTY_NAME | cut -d'"' -f2)"
     info "CPU: $(nproc) cores | RAM: $(free -h | awk '/Mem:/{print $2}') | Disk: $(df -h / | tail -1 | awk '{print $4}') free"
 
@@ -85,7 +110,7 @@ install_system_deps() {
     apt-get upgrade -y -qq
 
     info "Установка зависимостей..."
-    apt-get install -y -qq snapd curl ca-certificates gnupg
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq snapd curl ca-certificates gnupg iptables-persistent
 
     # Модули ядра для Docker overlay2 в LXD
     modprobe overlay 2>/dev/null || true
@@ -196,7 +221,7 @@ install_lxd() {
     local lxd_subnet
     lxd_subnet=$(lxc network show lxdbr0 2>/dev/null | grep "ipv4.address" | awk '{print $2}' | sed 's|\.[0-9]*/|.0/|')
     local default_iface
-    default_iface=$(ip route | grep "^default" | awk '{print $5}' | head -1)
+    default_iface=$(detect_default_iface)
 
     if [ -n "$lxd_subnet" ] && [ -n "$default_iface" ]; then
         info "Настройка iptables: LXD ($lxd_subnet) -> $default_iface"
@@ -208,7 +233,9 @@ install_lxd() {
         # NAT: маскарадинг
         iptables -t nat -C POSTROUTING -s "$lxd_subnet" -o "$default_iface" -j MASQUERADE 2>/dev/null || \
             iptables -t nat -I POSTROUTING 1 -s "$lxd_subnet" -o "$default_iface" -j MASQUERADE
-        success "iptables настроен"
+        # Сохраняем правила (переживут ребут)
+        netfilter-persistent save 2>/dev/null || iptables-save > /etc/iptables/rules.v4 2>/dev/null || true
+        success "iptables настроен и сохранён"
     else
         warn "Не удалось определить подсеть LXD или интерфейс. Настрой iptables вручную."
     fi
@@ -250,8 +277,18 @@ lxc.cap.drop="
         lxc restart "$name"
         wait_container_ready "$name" || { error "$name не стартовал"; continue; }
 
-        # Fix DNS inside container
-        lxc exec "$name" -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf" 2>/dev/null || true
+        # Fix DNS inside container (persistent — survives restart)
+        lxc exec "$name" -- bash -c "
+            mkdir -p /etc/systemd/resolved.conf.d
+            cat > /etc/systemd/resolved.conf.d/dns.conf <<DNSEOF
+[Resolve]
+DNS=8.8.8.8 1.1.1.1
+FallbackDNS=8.8.4.4
+DNSEOF
+            systemctl restart systemd-resolved 2>/dev/null || true
+            ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf 2>/dev/null || true
+            echo 'nameserver 8.8.8.8' > /etc/resolv.conf 2>/dev/null || true
+        " 2>/dev/null || true
 
         created=$((created + 1))
         success "$name создан"
@@ -631,7 +668,10 @@ while IFS=, read -r -u3 container status; do
         if [ "$NEW_STATUS" != "RUNNING" ]; then
             FAILED=$((FAILED + 1)); log "FAIL: $container — LXD не запустился"; continue
         fi
-        log "LXC_STARTED: $container"; sleep 5
+        log "LXC_STARTED: $container"
+        # Fix DNS after container restart
+        lxc exec "$container" </dev/null -- bash -c "echo 'nameserver 8.8.8.8' > /etc/resolv.conf" 2>/dev/null || true
+        sleep 5
     fi
 
     AUTH_STATUS=$(lxc exec "$container" </dev/null -- bash -c "optimai-cli auth status 2>&1" 2>/dev/null)
